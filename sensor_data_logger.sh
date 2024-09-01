@@ -4,12 +4,17 @@
 LOG_DIR="sensor_logs"
 mkdir -p $LOG_DIR
 
+# Setup python venv and install packages
+python -m venv venv
+source venv/bin/activate
+
+pip install adafruit-circuitpython-apds9960
+pip install board
+
 # Read sensor data and echo with date timestamp
 read_sensor_data() {
-    # TODO: fill out with actual sensor read
-    # Also needs to to do timestamp check to ensure enough time has passed to do sensor read
-    FAKE_DATA='123456'
-    echo "${FAKE_DATA};$(date)"
+    PROX_DATA=$(python python/read_proximity.py)
+    echo "${PROX_DATA};$(date)"
 }
 
 # Function to handle cleanup on exit

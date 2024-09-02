@@ -5,7 +5,7 @@ LOG_DIR="sensor_logs"
 mkdir -p $LOG_DIR
 
 # Setup python venv and install packages
-python -m venv venv
+python3 -m venv venv
 source venv/bin/activate
 
 pip install adafruit-circuitpython-apds9960
@@ -13,7 +13,7 @@ pip install board
 
 # Read sensor data and echo with date timestamp
 read_sensor_data() {
-    PROX_DATA=$(python python/read_proximity.py)
+    PROX_DATA=$(python3 python/read_proximity.py)
     echo "${PROX_DATA};$(date)"
 }
 

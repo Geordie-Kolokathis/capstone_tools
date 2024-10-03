@@ -1,52 +1,44 @@
 #!/bin/bash
 
-# Directory to store log files
-LOG_DIR="sensor_logs"
-mkdir -p $LOG_DIR
+# Default values for plot and db flags
+PLOT_FLAG=""
+DB_FLAG=""
+SENSOR_NAME=""
+
+# ./script.sh --sensor_name temperature /path/to/output --plot --db
+
+# Parse input parameters
+while [[ "$#" -gt 0 ]]; do
+    case $1 in
+        --plot) PLOT_FLAG="--plot" ;;       # Add the --plot flag if specified
+        --db) DB_FLAG="--db" ;;             # Add the --db flag if specified
+        --sensor_name) SENSOR_NAME="$2"; shift ;;  # Capture the sensor name
+        *) OUTPUT_DIR="$1" ;;               # Assume the first argument is the output directory
+    esac
+    shift
+done
 
 # Setup python venv and install packages
 python3 -m venv venv
 source venv/bin/activate
 
+# Sensor reading packages
 pip install adafruit-circuitpython-apds9960
-pip install board
+pip install adafruit-blinka
+# Data processing packages
+pip install matplotlib
+pip install psycopg2
 
-# Read sensor data and echo with date timestamp
-read_sensor_data() {
-    PROX_DATA=$(python3 python/read_proximity.py)
-    echo "${PROX_DATA};$(date)"
-}
+OUTPUT_DIR='sensor_logs'
+
+python3 "python/${SENSOR_NAME}_read.py" --output_dir $OUTPUT_DIR
 
 # Function to handle cleanup on exit
 cleanup() {
-    echo "Exiting script..."
-    echo "Output sensor data to '${LOG_DIR}'".
+    echo "Exiting Sensor Read script..."
+    python3 python/data_processing.py --input_directory $OUTPUT_DIR $PLOT_FLAG $DB_FLAG --table_name $SENSOR_NAME
     exit 0
 }
 
 # Trap Ctrl+C (SIGINT) to run cleanup function
 trap cleanup SIGINT
-
-# Infinite loop to read sensor data continuously
-while true; do
-    # Create a new log file with timestamp
-    TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-    LOG_FILE="$LOG_DIR/$TIMESTAMP.txt"
-    
-    # Write sensor data to log file
-    echo "Starting new log file: $LOG_FILE"
-    while true; do
-        # Read sensor data
-        SENSOR_DATA=$(read_sensor_data)
-        
-        # Append data to the current log file
-        echo $SENSOR_DATA >> $LOG_FILE
-        
-        # Create a new file every 100 KB (102400 bytes) - ~2845 lines 
-        # Adjust based on desired file size & read time
-        FILE_SIZE=$(stat -c%s "$LOG_FILE")
-        if [ $FILE_SIZE -ge 102400 ]; then
-            break
-        fi
-    done
-done

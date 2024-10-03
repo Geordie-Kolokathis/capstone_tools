@@ -24,3 +24,15 @@
     Requires docker to be installed w/ local ubuntu container. May have issues with accessing physical sensors when run by docker container, this use case is untested. Docker mostly considered for use as a tool where the physical board isn't available.
 
     Can be exited via Ctrl+C
+
+# Database
+    Database is being set up according to https://www.microfocus.com/documentation/idol/IDOL_12_0/MediaServer/Guides/html/English/Content/Getting_Started/Configure/_TRN_Set_up_PostgreSQL.htm
+
+    Server listening port 5432, user: postgres, pw: password
+
+    CREATE DATABASE sensor_data WITH ENCODING 'UTF8'
+
+# Dashboard
+    Grafana, set up dashboard according to https://grafana.com/grafana/download?pg=get&plcmt=selfmanaged-box1-cta1
+    
+    Run server and connect via localhost

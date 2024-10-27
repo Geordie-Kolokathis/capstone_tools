@@ -28,6 +28,8 @@ pip install adafruit-blinka
 # Data processing packages
 pip install matplotlib
 pip install psycopg2
+pip install scipy
+pip install numpy
 
 OUTPUT_DIR='sensor_logs'
 

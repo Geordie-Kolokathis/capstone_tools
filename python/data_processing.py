@@ -1,12 +1,15 @@
 import argparse
 import os
-from datetime import datetime
+from datetime import datetime, time
 import matplotlib.pyplot as plt
 import psycopg2
+import numpy as np
+from scipy.signal import find_peaks
 
 # Requires:
 # pip install matplotlib
 # pip install psycopg2
+# pip install scipy
 
 def convert_value(value):
     """
@@ -17,47 +20,101 @@ def convert_value(value):
     Consider input arg for different conversions based on sensor. Should
     return a distance value of some form.
     """
-    return int(value)  # Placeholder conversion
+    return int(value)
 
-def convert_timestamp(unix_timestamp):
-    """
-    Converts a Unix epoch timestamp in seconds to a readable date-time format.
-    Returns the date-time string in the format YYYY-MM-DD-HH-mm-ss.
-    """
-    # Convert the Unix timestamp to a datetime object
-    dt_object = datetime.fromtimestamp(float(unix_timestamp))
-    # Format the datetime object into the desired string format
-    return dt_object.strftime('%Y-%m-%d-%H-%M-%S')
+def seconds_to_sql_time(seconds_str):
+    seconds_float = float(seconds_str)
+    # Extract hours, minutes, seconds, and microseconds
+    hours = int(seconds_float // 3600) % 24
+    minutes = int((seconds_float % 3600) // 60)
+    seconds = int(seconds_float % 60)
+    microseconds = int((seconds_float - int(seconds_float)) * 1_000_000)
+    
+    # Create a TIME object
+    return time(hour=hours, minute=minutes, second=seconds, microsecond=microseconds)
+
+def estimate_rolling_rpm(data_values, time_values, window_size, min_time_interval):
+    rolling_rpm = []
+    
+    # Calculate the number of windows
+    num_windows = len(data_values) // window_size
+
+    # Iterate through each exclusive window
+    for w in range(num_windows):
+        # Get the current window of time and data values
+        start_index = w * window_size
+        end_index = start_index + window_size
+        time_window = time_values[start_index:end_index]
+        data_window = data_values[start_index:end_index]
+
+        # Find peaks in the current window
+        peaks, _ = find_peaks(data_window)
+
+        # Filter peaks based on minimum time interval
+        filtered_peaks = []
+        last_peak_time = None
+
+        for peak in peaks:
+            if last_peak_time is None or (time_window[peak] - last_peak_time) >= min_time_interval:
+                filtered_peaks.append(peak)
+                last_peak_time = time_window[peak]
+
+        if len(filtered_peaks) > 1:  # Need at least two peaks to compute an average period
+            # Calculate the times of all filtered peaks
+            peak_times = np.array(time_window)[filtered_peaks]
+            # Calculate time differences between all consecutive peaks
+            time_diffs = np.diff(peak_times)
+
+            # Calculate the average period from the time differences
+            average_period = np.mean(time_diffs)
+
+            # Calculate RPM from the average period
+            rpm = 60 / average_period
+
+            # Append the RPM and the midpoint time of the window to the result
+            midpoint_time = np.mean(peak_times)
+            rolling_rpm.append((int(rpm), seconds_to_sql_time(midpoint_time)))
+
+    return rolling_rpm
 
 def process_file(file_path):
     """
     Reads data from a file, processes each line to extract value and timestamp,
     converts them using respective functions, and stores the results in a list of tuples.
     """
-    results = []
+    distance = []
+    rpm = []
+    distance_raw = []
+    time_raw = []
 
     with open(file_path, 'r') as file:
         for line in file:
             # Split the line into value and timestamp
-            value, timestamp = line.strip().split(';')
+            timestamp, value = line.strip().split(';')
 
             # Convert the value using the value conversion function
             converted_value = convert_value(value)
 
             # Convert the timestamp using the timestamp conversion function
-            converted_timestamp = convert_timestamp(timestamp)
+            converted_timestamp = seconds_to_sql_time(timestamp)
 
             # Store the results as a tuple in the results list
-            results.append((converted_value, converted_timestamp))
+            distance.append((converted_value, converted_timestamp))
+            distance_raw.append(int(value))
+            time_raw.append(float(timestamp))
 
-    return results
+    # 175 data points used for rolling rpm - approx 4 seconds
+    rpm = estimate_rolling_rpm(distance_raw, time_raw, 175, 0.5)
+
+    return [distance, rpm]
 
 def process_directory(directory_path):
     """
     Processes all .txt files in the specified directory.
     Calls process_file on each .txt file found.
     """
-    all_results = []
+    distance_all = []
+    rpm_all = []
 
     # Iterate through all files in the directory
     for filename in os.listdir(directory_path):
@@ -67,10 +124,11 @@ def process_directory(directory_path):
             print(f"Processing file: {file_path}")
 
             # Process the file and append the results
-            file_results = process_file(file_path)
-            all_results.extend(file_results)
+            metrics = process_file(file_path)
+            distance_all.extend(metrics[0])
+            rpm_all.extend(metrics[1])
 
-    return all_results
+    return {'distance': distance_all, 'rpm': rpm_all}
 
 def plot_data(data):
     """
@@ -92,7 +150,7 @@ def plot_data(data):
     plt.tight_layout()
     plt.show()
 
-def write_to_database(data, table_name):
+def write_to_database(metrics, sensor_name):
     """
     Writes the processed data to a local PostgreSQL database.
     Each entry in the data list is expected to be a tuple (converted_value, converted_timestamp).
@@ -111,25 +169,26 @@ def write_to_database(data, table_name):
         conn = psycopg2.connect(**db_params)
         cursor = conn.cursor()
 
-        # Create table if it does not exist
-        cursor.execute(f"""
-            CREATE TABLE IF NOT EXISTS {table_name} (
-                id SERIAL PRIMARY KEY,
-                value INTEGER,
-                timestamp TIMESTAMP
-            );
-        """)
+        for metric in ['distance', 'rpm']:
+            # Create table if it does not exist
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS {sensor_name}_{metric} (
+                    id SERIAL PRIMARY KEY,
+                    value INTEGER,
+                    time TIME
+                );
+            """)
 
-        # Insert data into the database
-        for value, timestamp in data:
-            cursor.execute(
-                f"INSERT INTO {table_name} (value, timestamp) VALUES (%s, %s);",
-                (value, datetime.strptime(timestamp, '%Y-%m-%d-%H-%M-%S'))
-            )
+            # Insert data into the database
+            for value, timestamp in metrics[metric]:
+                cursor.execute(
+                    f"INSERT INTO {sensor_name}_{metric} (value, time) VALUES (%s, %s);",
+                    (value, timestamp)
+                )
 
-        # Commit the changes
-        conn.commit()
-        print("Data successfully written to the database.")
+            # Commit the changes
+            conn.commit()
+            print("Data successfully written to the database.")
 
     except Exception as e:
         print(f"Error writing to the database: {e}")
